@@ -1,0 +1,48 @@
+pragma solidity ^0.8.0;
+
+contract VentaMotocicleta {
+    address payable public vendedor;
+    address payable public comprador;
+    uint public precio;
+    string public modelo;
+    bool public vendida;
+
+    event MotocicletaVendida(address indexed vendedor, address indexed comprador, uint precio, string modelo);
+
+    constructor() {
+        vendedor = payable(msg.sender);
+        modelo = "Honda Rebel CMX 500";
+        precio = 3000 ether; // Precio en ethers
+        vendida = false;
+    }
+
+    modifier soloVendedor() {
+        require(msg.sender == vendedor, "Solo el vendedor puede realizar esta operación");
+        _;
+    }
+
+    modifier soloComprador() {
+        require(msg.sender == comprador, "Solo el comprador puede realizar esta operación");
+        _;
+    }
+
+    modifier noVendida() {
+        require(!vendida, "La motocicleta ya ha sido vendida");
+        _;
+    }
+
+    function comprar() public payable noVendida {
+        require(msg.value >= precio, "No se ha enviado suficiente ether");
+
+        comprador = payable(msg.sender);
+        vendida = true;
+        emit MotocicletaVendida(vendedor, comprador, precio, modelo);
+
+        vendedor.transfer(msg.value);
+    }
+
+    function retirarFondos() public soloVendedor {
+        require(vendida, "La motocicleta no ha sido vendida");
+        vendedor.transfer(address(this).balance);
+    }
+}
