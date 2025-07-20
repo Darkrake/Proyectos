@@ -1,0 +1,228 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract PrestamoDeFi {
+
+    address public socioPrincipal;
+
+    struct Prestamo {
+        uint256 id;
+        address prestatario;
+        uint256 monto;
+        uint256 plazo;
+        uint256 tiempoSolicitud;
+        uint256 tiempoLimite;
+        bool aprobado;
+        bool reembolsado;
+        bool liquidado;
+
+    }
+
+    struct Cliente {
+        bool activado;
+        uint256 saldoGarantia;
+        mapping(uint256 => Prestamo) prestamos;
+        uint256[] prestamoIds;
+
+    }
+       
+     mapping(address => Cliente) public clientes;
+
+     mapping(address => bool) public empleadosPrestamista;
+
+
+     // Evento para la solicitud de préstamo
+    event SolicitudPrestamo(address indexed prestatario, uint256 indexed monto, uint256 plazo);
+
+     // Evento para préstamo aprobado
+    event PrestamoAprobado(address indexed prestatario, uint256 indexed monto);
+
+    // Evento para reembolso de préstamo
+    event PrestamoReembolsado(address indexed prestatario, uint256 monto);
+
+    // Evento para liquidación de garantía
+    event GarantiaLiquidada(address indexed prestatario, uint256 monto);
+
+
+   modifier soloSocioPrincipal() {
+   require(msg.sender == socioPrincipal, "Error, solo el socio principal puede ejecutar esta funcion.");
+   _;
+    }
+    
+   modifier soloEmpleadoPrestamista() {
+    require(empleadosPrestamista[msg.sender], "Acceso no autorizado");
+    _;
+    }
+
+   modifier soloClienteRegistrado() {
+   require(clientes[msg.sender].activado,"No eres un cliente registrado");
+   _;
+   }
+   
+    constructor() {
+    socioPrincipal = msg.sender;
+    empleadosPrestamista[socioPrincipal] = true;
+    }
+
+   //La función que se encargará de asignar al mapping de empleadosPrestamista el nuevo address
+
+    function altaPrestamista(address nuevoPrestamista) public {
+
+    require(!empleadosPrestamista[nuevoPrestamista], "Error, el prestamista ya esta dado de alta");
+
+
+    empleadosPrestamista[nuevoPrestamista] = true;
+
+    }
+
+    // La función que se encargará de asignar al mapping de clientes el nuevo address
+
+    function altaCliente(address nuevoCliente) public {
+        
+    require(!clientes[nuevoCliente].activado, "Cliente ya registrado");
+         
+    Cliente storage structNuevoCliente = clientes[nuevoCliente];
+
+    structNuevoCliente.activado = true;
+    structNuevoCliente.saldoGarantia = 0;
+    }
+
+   // La función que se encargará de recibir ether del cliente para ser depositado como garantía y actualizar la variable saldoGarantía del cliente
+
+    function depositarGarantia() public payable soloClienteRegistrado {
+        // Actualizamos el saldo de garantía del cliente
+        clientes[msg.sender].saldoGarantia += uint256(msg.value);
+    }
+
+    // La función que permitirá al prestatario/cliente registrado solicitar un préstamo seleccionando el monto y los plazos del mismo
+
+     function solicitarPrestamo(uint256 monto_, uint256 plazo_) public soloClienteRegistrado returns (uint256) {
+        // Verificar si el cliente tiene suficiente saldo de garantía
+        require(clientes[msg.sender].saldoGarantia >= uint256(monto_), "Saldo de garantia insuficiente");
+
+        // Asignar un nuevo ID al préstamo
+        uint256 nuevoId = clientes[msg.sender].prestamoIds.length + 1;
+
+        // Crear una instancia del struct Prestamo
+        Prestamo storage nuevoPrestamo = clientes[msg.sender].prestamos[nuevoId];
+        nuevoPrestamo.id = nuevoId;
+        nuevoPrestamo.prestatario = msg.sender;
+        nuevoPrestamo.monto = monto_;
+        nuevoPrestamo.plazo = plazo_;
+        nuevoPrestamo.tiempoSolicitud = block.timestamp;
+        nuevoPrestamo.tiempoLimite = 0;
+        nuevoPrestamo.aprobado = false;
+        nuevoPrestamo.reembolsado = false;
+        nuevoPrestamo.liquidado = false;
+
+        // Agregar el nuevo ID al array prestamoIds
+        clientes[msg.sender].prestamoIds.push(nuevoId);
+
+        // Emitir el evento SolicitudPrestamo
+        emit SolicitudPrestamo(msg.sender, monto_, plazo_);
+
+        // Devolver el nuevo ID como parámetro de salida
+        return nuevoId;
+    }
+
+    //La función que permitirá al prestamista registrado aprobar un préstamo específico
+
+     function aprobarPrestamo(address prestatario_, uint256 id_) public soloEmpleadoPrestamista {
+        Cliente storage prestatario = clientes[prestatario_];
+        require(id_ > 0 && id_ <= prestatario.prestamoIds.length , "El ID del prestamo no es valido");
+        
+        Prestamo storage prestamo = prestatario.prestamos[id_];
+        require(!prestamo.aprobado, "El prestamo ya esta aprobado");
+        require(!prestamo.reembolsado, "El prestamo ya esta reembolsado");
+        require(!prestamo.liquidado, "El prestamo ya esta liquidado");
+        
+        prestamo.aprobado = true;
+        prestamo.tiempoLimite = block.timestamp + prestamo.plazo;
+        
+        emit PrestamoAprobado(prestatario_, id_);
+    }
+
+    //Función para reembolsar la cantidad pertinente de un préstamo específico.
+
+   function reembolsarPrestamo(uint256 id_) public soloClienteRegistrado {
+    // Almacenamos los datos del prestatario
+    Cliente storage prestatario = clientes[msg.sender];
+
+    // Comprobamos si el id_ del préstamo existe para el prestatario
+    require(id_ > 0 && prestatario.prestamoIds.length >= id_, "ID de prestamo no valido");
+
+    // Almacenamos los detalles del préstamo
+    Prestamo storage prestamo = prestatario.prestamos[id_];
+
+    // Realizamos las comprobaciones necesarias
+    require(prestamo.prestatario == msg.sender, "No eres el prestatario de este prestamo");
+    require(prestamo.aprobado, "El prestamo no esta aprobado");
+    require(!prestamo.reembolsado, "El prestamo ya esta reembolsado");
+    require(!prestamo.liquidado, "El prestamo ya esta liquidado");
+    require(prestamo.tiempoLimite >= block.timestamp, "Error: El tiempo limite ha vencido");
+
+    // Transferimos el monto del préstamo al socioPrincipal
+    address payable socioPrincipalPayable = payable(socioPrincipal);
+    socioPrincipalPayable.transfer(prestamo.monto);
+
+    // Actualizamos campos del préstamo y del prestatario
+    prestamo.reembolsado = true;
+    prestatario.saldoGarantia -= prestamo.monto;
+
+    // Emitimos el evento PrestamoReembolsado
+    emit PrestamoReembolsado(msg.sender, id_);
+}
+
+   // La función que permitirá al prestamista registrado liquidar la cantidad pertinente de un préstamo específico en base a la garantía depositada por el prestatario en caso de que el tiempo límite habrá vencido
+
+    function liquidarGarantia(address prestatario_, uint256 id_) public {
+
+    Cliente storage prestatario = clientes[prestatario_];
+
+    require(id_ > 0 && prestatario.prestamoIds.length >= id_, "ID de prestamo no valido");
+
+    Prestamo storage prestamo = prestatario.prestamos[id_];
+
+    require(prestamo.aprobado, "El prestamo no esta aprobado");
+    require(!prestamo.reembolsado, "El prestamo ya esta reembolsado");
+    require(!prestamo.liquidado, "El prestamo ya esta liquidado");
+    require(prestamo.tiempoLimite < block.timestamp, "Error: No se ha podido liquidar la garantia");
+
+       // Transferir la garantía al socio principal
+        address payable socioPrincipalPayable = payable(socioPrincipal);
+        socioPrincipalPayable.transfer(prestamo.monto);
+
+        // Actualizar campos del préstamo y del cliente
+        prestamo.liquidado = true;
+        prestatario.saldoGarantia -= prestamo.monto;
+
+        // Emitir el evento de liquidación de garantía
+        emit GarantiaLiquidada(prestatario_, prestamo.monto);
+    }
+   // Función para obtener los identificadores de los préstamos por prestatario
+
+    function obtenerPrestamosPorPrestatario(address prestatario_) public view returns (uint256[] memory) {
+        // Obtener el struct Cliente asociado al prestatario
+    Cliente storage prestatario = clientes[prestatario_];
+        
+        return prestatario.prestamoIds;
+    }
+
+    // Función para obtener todos los detalles de un préstamo específico
+
+   function obtenerDetallesPrestamo(address prestatario_, uint256 id_) public view returns (Prestamo memory) {
+        return clientes[prestatario_].prestamos[id_];
+}
+
+    }
+
+
+
+
+
+    
+
+    
+
+
+
